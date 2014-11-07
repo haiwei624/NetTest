@@ -30,6 +30,18 @@ struct param
     int id;
 };
 
+pthread_mutex_t tot_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t print_mutex = PTHREAD_MUTEX_INITIALIZER;    //just for printf when debug
+pthread_mutex_t switch_mutex = PTHREAD_MUTEX_INITIALIZER;   //for SwitchPort()
+
+const int port_priority[3] = {0, 1, 2}; //means: port0 has the highest priority to be choosed, than port1,than port2 
+int netstatus[3];
+unsigned int tot;
+struct netflag Flags;
+struct asock asock;
+int PortNow;
+
+void init_mutex();
 int init_netflag(struct netflag *a);
 int update_netflag(struct netflag *a, int flag);
 struct asock * get_sock_c(char s_addr[], char s_port[]);
@@ -37,13 +49,12 @@ int sendto_c(struct asock * asock, char msg[]);
 int recvfrom_c(struct asock * asock, char msg[]);
 int wait_recv(struct asock * asock, char msg[], int WaitTime);
 void * TestPort(void * v);
+void * SwitchPort(void * v);
+void ChangeNet(int bestport);
 struct param * make_param(struct asock * asock, int id);
 
 
-int netstatus[3];
-unsigned int tot;
-struct netflag Flags;
-struct asock asock;
+
 
 int main(int argc, char **argv)
 {
@@ -54,10 +65,20 @@ int main(int argc, char **argv)
     }
     printf("This is a UDP client\n");
 
-    tot = 0;
+    init_mutex();   //initialize all mutex
 
-    pthread_t pt_t[3];
     int pi;
+    tot = 0;
+    PortNow = 0;
+    for(pi = 0; pi < 3; pi++)
+    {
+        netstatus[pi] = 1;
+    }
+
+
+    pthread_t pt_t[3],pt_s;
+    pthread_create(&pt_s, NULL, SwitchPort, NULL);
+    
     for(pi = 0; pi < 3; pi++)
     {
         struct asock * asock = get_sock_c(argv[1], argv[2+pi]);
@@ -69,6 +90,7 @@ int main(int argc, char **argv)
     {
         pthread_join(pt_t[pi], NULL);
     }
+    return 0;
 }
 
 
@@ -82,7 +104,7 @@ void * TestPort(void * v)
     struct netflag Flags;
     init_netflag(&Flags);
 
-    netstatus[id] = 1;//1 good,0 close
+    //netstatus[id] = 1;//1 good,0 close
     
     char msg[BUFFLENGTH];
     while (1)
@@ -90,10 +112,15 @@ void * TestPort(void * v)
         //gets(buff);
         //printf("tid: %u\n", (unsigned int) tid);
 
+        pthread_mutex_lock(&tot_mutex);
         tot++;
-        sprintf(msg, "%u", tot);//prepare msg
+        sprintf(msg, "%d%u", PortNow, tot);//prepare msg
+        pthread_mutex_unlock(&tot_mutex);
+
         sendto_c(asock, msg);//send msg
         //printf("sent: %s\n", msg);
+        
+
 
         int flag = wait_recv(asock, msg, 1000000);//wait 1s for response
         /*
@@ -102,16 +129,21 @@ void * TestPort(void * v)
         */
 
         update_netflag(&Flags, flag);
-        if(ARRLENGTH - Flags.tot >= MAXFAIL) netstatus[id] = 0;
-            else if(ARRLENGTH - Flags.tot <= MINFAIL) netstatus[id] = 1;
+        pthread_mutex_lock(&print_mutex);
+        printf("Port%d Statue: %s %d/%d \n", id, (flag?("Success."):("Failed. ")), Flags.tot, ARRLENGTH);
+        pthread_mutex_unlock(&print_mutex);
 
-        printf("Port%d Statue: %s %d/%d", id, (flag?("Success."):("Failed. ")), Flags.tot, ARRLENGTH);
-        printf("Netstatus: ");
-        int i;
-        for(i = 0; i <3; i++)
-            if(netstatus[i] == 0) printf("Closed.");
-                else printf("Good.  ");
-        printf("\n");
+        if(ARRLENGTH - Flags.tot >= MAXFAIL && netstatus[id] == 1)
+        {
+            netstatus[id] = 0;
+            pthread_mutex_unlock(&switch_mutex);//let SwitchPort runs~
+        }
+        else if(ARRLENGTH - Flags.tot <= MINFAIL && netstatus[id] == 0)
+        {
+            netstatus[id] = 1;
+            pthread_mutex_unlock(&switch_mutex);//let SwitchPort runs~
+        } 
+        
         /*
         if(netstatus[id] == 0) printf("Closed.\n");
             else printf("Good\n");
@@ -119,10 +151,57 @@ void * TestPort(void * v)
 
         /*recvfrom_c(sock, &addr, buff);//recv msg
         printf("received: %s\n", buff);*/
-        usleep(100000);
+        usleep(10000);
     }
     
     return 0;
+}
+
+
+void * SwitchPort(void * v)
+{
+    while(1)
+    {
+        pthread_mutex_lock(&switch_mutex);
+        pthread_mutex_lock(&print_mutex);
+        printf("!!!SwitchPort runs~  Netstatus: ");
+        int i;
+        for(i = 0; i < 3; i++)
+            if(netstatus[i] == 0) printf("Closed.");
+                else printf("Good.  ");
+        printf("\n");
+        pthread_mutex_unlock(&print_mutex);
+        int bestport = port_priority[2];// assume that the last priority port is most stable
+        for(i = 0; i < 3; i++)
+        if(netstatus[port_priority[i]])
+        {
+            bestport = port_priority[i];
+            break;
+        }
+        if(bestport != PortNow) ChangeNet(bestport);
+    }
+}
+
+void ChangeNet(int bestport)
+{
+
+    pthread_mutex_lock(&tot_mutex);
+    PortNow = bestport;
+    /*
+    Code to change the network
+    */
+    pthread_mutex_unlock(&tot_mutex);
+
+    pthread_mutex_lock(&print_mutex);
+    printf("!!!!!!!!!!!!!!!!!!!!!Control Port changed to port%d\n", PortNow);
+    pthread_mutex_unlock(&print_mutex);
+}
+
+void init_mutex()//initialize all mutex
+{
+    pthread_mutex_init(&tot_mutex, NULL);
+    pthread_mutex_init(&print_mutex, NULL);//just for printf when debug
+    pthread_mutex_init(&switch_mutex, NULL);//for SwitchPort()
 }
 
 struct param * make_param(struct asock * asock, int id)
