@@ -9,7 +9,7 @@
 #include <stdlib.h>
 #include <arpa/inet.h>
 
-#define BUFFLENGTH 512
+#define BUFFLENGTH 65536
 #define MAXMINUS 1000
 
 int PortNow, Maxtot; 
@@ -83,7 +83,7 @@ int main(int argc, char **argv)
 {
     if (argc != 4)
     {
-        printf("Usage: %s port\n", argv[0]);
+        printf("Usage: %s port port port\n", argv[0]);
         exit(1);
     }
     printf("This is a UDP server, I will received message from client and reply with same message\n");
@@ -117,10 +117,8 @@ int main(int argc, char **argv)
     {
         FD_ZERO(&inputs);
         inputs = allPortSet;
-        //printf("selecting...\n");
         int result = select(FD_SETSIZE, &inputs, NULL, NULL, NULL);  //wait until some messages arrive
         if(result <= 0)continue;
-        //printf("get UDP!\n");
         for(pi = 0; pi < 3; pi++)
         if(FD_ISSET(sock[pi], &inputs))
         {
@@ -148,19 +146,6 @@ int main(int argc, char **argv)
             }
         }
 
-        /*
-        recvfrom_s(sock, &addr_c, buff);//recv msg
-        printf("%s %u says: %s\n", inet_ntoa(addr_c.sin_addr), ntohs(addr_c.sin_port), buff);
-        //printf("%s\n", buff);
-        int WaitTime = rand()%1000;
-        usleep(WaitTime * 1000);
-
-        sendto_s(sock, &addr_c, buff);//send msg
-        printf("sent: %s\n", buff);
-        */
-        
-
-        //usleep(300000);
     }
     
     return 0;
